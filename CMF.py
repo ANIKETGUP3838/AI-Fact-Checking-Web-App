@@ -2,51 +2,47 @@ import streamlit as st
 import pdfplumber
 import os
 import re
-import os
-os.environ["OPENAI_API_KEY"] = "sk-xxxxxxxx"
-os.environ["TAVILY_API_KEY"] = "tvly-xxxxxxxx"
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from langchain_community.tools.tavily_search import TavilySearchResults
 
-# =============================
+# =====================================================
 # STREAMLIT CONFIG
-# =============================
-st.set_page_config(
-    page_title="AI Fact Checker",
-    layout="wide"
-)
-
+# =====================================================
+st.set_page_config(page_title="AI Fact Checker", layout="wide")
 st.title("🕵️ AI Fact-Checking Web App")
 st.write("Upload a PDF to verify factual claims using live web data.")
 
-# =============================
-# ENVIRONMENT CHECK
-# =============================
-if not os.getenv("OPENAI_API_KEY"):
-    st.error("❌ OPENAI_API_KEY not found. Please set it in environment variables.")
+# =====================================================
+# LOAD API KEYS (Secrets → Env fallback)
+# =====================================================
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
+TAVILY_API_KEY = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY"))
+
+if not OPENAI_API_KEY or not TAVILY_API_KEY:
+    st.warning(
+        "⚠️ API keys not found.\n\n"
+        "Please add **OPENAI_API_KEY** and **TAVILY_API_KEY** in Streamlit Secrets."
+    )
     st.stop()
 
-if not os.getenv("TAVILY_API_KEY"):
-    st.error("❌ TAVILY_API_KEY not found. Please set it in environment variables.")
-    st.stop()
+os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
-# =============================
+# =====================================================
 # INITIALIZE MODELS
-# =============================
+# =====================================================
 llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0
 )
 
-search_tool = TavilySearchResults(
-    max_results=3
-)
+search_tool = TavilySearchResults(max_results=3)
 
-# =============================
+# =====================================================
 # FUNCTIONS
-# =============================
+# =====================================================
 def extract_text_from_pdf(uploaded_file):
     text = ""
     with pdfplumber.open(uploaded_file) as pdf:
@@ -61,7 +57,6 @@ def extract_claims(text):
     prompt = f"""
     Extract ONLY factual, verifiable claims from the text below.
     Claims must contain numbers, dates, statistics, or measurable facts.
-
     Return each claim on a new line.
 
     TEXT:
@@ -77,7 +72,7 @@ def extract_claims(text):
         if re.search(r"\d", line)
     ]
 
-    return list(dict.fromkeys(claims))  # remove duplicates
+    return list(dict.fromkeys(claims))
 
 
 def verify_claim(claim):
@@ -89,13 +84,12 @@ def verify_claim(claim):
     Search Results:
     {search_results}
 
-    Decide whether the claim is:
+    Classify the claim as:
     - Verified
     - Inaccurate
     - False
 
     Respond in this format:
-
     Status: <Verified/Inaccurate/False>
     Explanation: <1–2 lines explanation>
     """
@@ -104,9 +98,9 @@ def verify_claim(claim):
     return response.content, search_results
 
 
-# =============================
+# =====================================================
 # UI
-# =============================
+# =====================================================
 uploaded_file = st.file_uploader("📄 Upload PDF", type=["pdf"])
 
 if uploaded_file:
@@ -117,7 +111,7 @@ if uploaded_file:
         claims = extract_claims(text)
 
     if not claims:
-        st.warning("No factual claims detected in the document.")
+        st.warning("No factual claims detected in this document.")
         st.stop()
 
     st.subheader("📌 Extracted Claims")
