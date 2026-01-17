@@ -39,28 +39,35 @@ with tab2:
     if uploaded_file is None:
         st.stop()
 
-    # ---------- LOAD DATA ----------
+    # ---------- LOAD CSV ----------
     crypto_df = pd.read_csv(uploaded_file)
 
-    # ---------- COLUMN SELECTION (SAFE) ----------
-    all_columns = list(crypto_df.columns)
-    st.sidebar.write("Detected columns:", all_columns)
+    # ✅ CRITICAL FIX — NORMALIZE COLUMN NAMES
+    crypto_df.columns = (
+        crypto_df.columns
+        .astype(str)
+        .str.replace("\ufeff", "", regex=False)
+        .str.strip()
+    )
 
-    date_col = st.sidebar.selectbox("Select Date Column", all_columns)
-    crypto_col = st.sidebar.selectbox("Select Crypto Column", all_columns)
+    # ---------- SHOW TRUE COLUMN NAMES ----------
+    st.sidebar.markdown("### Cleaned Columns")
+    st.sidebar.write(list(crypto_df.columns))
 
-    # ---------- HARD ASSERTIONS ----------
-    if date_col not in crypto_df.columns:
-        st.error(f"Date column `{date_col}` not found")
-        st.stop()
+    # ---------- USER SELECT COLUMNS ----------
+    date_col = st.sidebar.selectbox(
+        "Select Date Column",
+        options=list(crypto_df.columns)
+    )
 
-    if crypto_col not in crypto_df.columns:
-        st.error(f"Crypto column `{crypto_col}` not found")
-        st.stop()
+    crypto_col = st.sidebar.selectbox(
+        "Select Crypto Identifier Column",
+        options=list(crypto_df.columns)
+    )
 
     # ---------- SAFE DATE CONVERSION ----------
-    crypto_df.loc[:, date_col] = pd.to_datetime(
-        crypto_df.loc[:, date_col],
+    crypto_df[date_col] = pd.to_datetime(
+        crypto_df[date_col],
         errors="coerce"
     )
 
@@ -69,11 +76,11 @@ with tab2:
 
     crypto_value = st.sidebar.selectbox(
         "Cryptocurrency",
-        sorted(crypto_df.loc[:, crypto_col].astype(str).unique())
+        sorted(crypto_df[crypto_col].astype(str).unique())
     )
 
-    filtered_df = crypto_df.loc[
-        crypto_df.loc[:, crypto_col].astype(str) == crypto_value
+    filtered_df = crypto_df[
+        crypto_df[crypto_col].astype(str) == crypto_value
     ].copy()
 
     filtered_df = filtered_df.set_index(date_col)
@@ -87,23 +94,26 @@ with tab2:
         st.error("No numeric columns available.")
         st.stop()
 
-    target_col = st.sidebar.selectbox("Target Variable", numeric_cols)
+    target_col = st.sidebar.selectbox(
+        "Target Variable",
+        options=numeric_cols
+    )
 
-    if target_col not in filtered_df.columns:
-        st.error(f"Target column `{target_col}` missing")
-        st.stop()
-
-    series = filtered_df.loc[:, target_col].dropna()
+    series = filtered_df[target_col].dropna()
 
     if len(series) < 120:
-        st.warning("Need at least 120 rows")
+        st.warning("At least 120 data points required.")
         st.stop()
 
-    # ---------- VISUALIZATION ----------
+    # ---------- PLOTS ----------
     st.plotly_chart(px.line(series, title="Time Series"), use_container_width=True)
 
     # ---------- DECOMPOSITION ----------
-    decomposition = sm.tsa.seasonal_decompose(series, model="additive", period=30)
+    decomposition = sm.tsa.seasonal_decompose(
+        series,
+        model="additive",
+        period=30
+    )
 
     fig = make_subplots(rows=4, cols=1)
     fig.add_trace(go.Scatter(y=decomposition.observed), 1, 1)
@@ -114,7 +124,7 @@ with tab2:
     st.plotly_chart(fig, use_container_width=True)
 
     # ---------- ADF ----------
-    st.write("ADF Test:", adfuller(series)[1])
+    st.write("ADF p-value:", adfuller(series)[1])
 
     train = series[:-90]
     test = series[-90:]
@@ -131,7 +141,7 @@ with tab2:
         forecast = model.get_forecast(90).predicted_mean
         st.write("RMSE:", np.sqrt(mean_squared_error(test, forecast)))
 
-    # ---------- EXP SMOOTH ----------
+    # ---------- EXPONENTIAL SMOOTHING ----------
     if st.button("Run Exponential Smoothing"):
         model = ExponentialSmoothing(
             train, trend="add", seasonal="add", seasonal_periods=30
