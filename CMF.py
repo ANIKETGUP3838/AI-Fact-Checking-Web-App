@@ -29,7 +29,7 @@ with tab1:
     st.markdown("""
     **Cryptocurrency Market Forecasting App**
 
-    Models:
+    Models implemented:
     - ARIMA
     - SARIMA
     - Exponential Smoothing
@@ -46,30 +46,30 @@ with tab2:
     )
 
     if uploaded_file is None:
-        st.info("Upload a CSV file to continue.")
+        st.info("Please upload a CSV file to continue.")
         st.stop()
 
     # ---------- LOAD DATA ----------
     crypto_df = pd.read_csv(uploaded_file)
 
-    # ---------- USER-SELECT DATE COLUMN (FIX) ----------
-    possible_date_cols = [
-        c for c in crypto_df.columns
-        if crypto_df[c].dtype == "object"
-    ]
-
-    if not possible_date_cols:
-        st.error("No possible date columns found.")
-        st.write("Columns:", list(crypto_df.columns))
+    if not isinstance(crypto_df, pd.DataFrame):
+        st.error("Invalid CSV file.")
         st.stop()
 
+    # ---------- SHOW COLUMNS (DEBUG & SAFETY) ----------
+    st.sidebar.markdown("### Dataset Columns")
+    st.sidebar.write(list(crypto_df.columns))
+
+    # ---------- USER SELECT DATE COLUMN (NO GUESSING) ----------
     date_col = st.sidebar.selectbox(
         "Select Date Column",
-        possible_date_cols
+        options=list(crypto_df.columns)
     )
 
-    # ✅ GUARANTEE date_col is a string
-    date_col = str(date_col)
+    # GUARANTEE STRING + EXISTENCE
+    if date_col not in crypto_df.columns:
+        st.error("Selected date column does not exist.")
+        st.stop()
 
     crypto_df[date_col] = pd.to_datetime(
         crypto_df[date_col],
@@ -77,17 +77,17 @@ with tab2:
     )
 
     crypto_df.dropna(subset=[date_col], inplace=True)
-    crypto_df.sort_values(date_col, inplace=True)
+    crypto_df.sort_values(by=date_col, inplace=True)
 
-    # ---------- USER-SELECT CRYPTO COLUMN ----------
-    categorical_cols = crypto_df.select_dtypes(
-        include=["object"]
-    ).columns.tolist()
-
+    # ---------- USER SELECT CRYPTO IDENTIFIER ----------
     crypto_col = st.sidebar.selectbox(
         "Select Crypto Identifier Column",
-        categorical_cols
+        options=list(crypto_df.columns)
     )
+
+    if crypto_col not in crypto_df.columns:
+        st.error("Selected crypto column does not exist.")
+        st.stop()
 
     crypto_value = st.sidebar.selectbox(
         "Cryptocurrency",
@@ -100,24 +100,28 @@ with tab2:
 
     filtered_df.set_index(date_col, inplace=True)
 
-    # ---------- TARGET COLUMN ----------
+    # ---------- USER SELECT TARGET COLUMN ----------
     numeric_cols = filtered_df.select_dtypes(
         include=["int64", "float64"]
     ).columns.tolist()
 
     if not numeric_cols:
-        st.error("No numeric columns found.")
+        st.error("No numeric columns available for forecasting.")
         st.stop()
 
     target_col = st.sidebar.selectbox(
         "Target Variable",
-        numeric_cols
+        options=numeric_cols
     )
+
+    if target_col not in filtered_df.columns:
+        st.error("Selected target column does not exist.")
+        st.stop()
 
     series = filtered_df[target_col].dropna()
 
     if len(series) < 120:
-        st.warning("At least 120 rows required.")
+        st.warning("At least 120 data points are required.")
         st.stop()
 
     # ---------- PREVIEW ----------
@@ -150,8 +154,8 @@ with tab2:
     fig.update_layout(height=800)
     st.plotly_chart(fig, use_container_width=True)
 
-    # ---------- ADF ----------
-    st.subheader("ADF Test")
+    # ---------- ADF TEST ----------
+    st.subheader("ADF Stationarity Test")
     adf = adfuller(series)
     st.write({
         "ADF Statistic": adf[0],
@@ -175,7 +179,6 @@ with tab2:
             order=(1, 1, 1),
             seasonal_order=(1, 1, 1, 7)
         ).fit()
-
         forecast = model.get_forecast(90).predicted_mean
         st.write("RMSE:", np.sqrt(mean_squared_error(test, forecast)))
 
@@ -187,7 +190,6 @@ with tab2:
             seasonal="add",
             seasonal_periods=30
         ).fit()
-
         forecast = model.forecast(90)
         st.write("RMSE:", np.sqrt(mean_squared_error(test, forecast)))
 
