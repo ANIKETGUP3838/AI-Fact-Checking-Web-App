@@ -1,243 +1,152 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import statsmodels.api as sm
-from statsmodels.tsa.statespace.sarimax import SARIMAX
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
-from statsmodels.tsa.stattools import adfuller
-from statsmodels.tsa.arima.model import ARIMA
-from arch import arch_model
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-from sklearn.metrics import mean_squared_error, r2_score
+import warnings
+warnings.filterwarnings("ignore")
+
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import warnings
 
-warnings.filterwarnings("ignore")
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from arch import arch_model
 
-# ================== PAGE CONFIG ==================
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, r2_score
+
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+
+# -------------------------------------------------
 st.set_page_config(layout="wide")
-st.title("📈 Cryptocurrency Market Forecasting App")
+st.title("📈 Cryptocurrency Price Forecasting App")
 
-tab1, tab2 = st.tabs(["📄 Project Summary", "📊 Forecasting App"])
+tab1, tab2 = st.tabs(["📄 Dataset Analysis", "📊 Forecasting"])
 
-# ================== HELPERS ==================
-def detect_crypto_column(df):
-    for col in ["symbol", "coin", "name", "id", "asset"]:
-        if col in df.columns:
-            return col
-    return None
-
-def detect_date_column(df):
-    for col in ["date", "timestamp", "time", "datetime"]:
-        if col in df.columns:
-            return col
-    return None
-
-# ================== TAB 1 ==================
+# -------------------------------------------------
 with tab1:
+    st.header("Dataset Overview")
     st.markdown("""
-    ### 🔍 Objective
-    Forecast cryptocurrency market behavior using time-series models.
+    **crypto-markets.csv** contains historical cryptocurrency market data.
 
-    ### 🧠 Models
-    - ARIMA
-    - SARIMA
-    - Exponential Smoothing
-    - ARCH / GARCH
-    - LSTM
-
-    ### 📈 Output
-    - 90-step forecast
-    - Seasonality & trend analysis
-    - Volatility modeling
+    **Target Variable:** `close` price  
+    **Frequency:** Daily  
+    **Use Cases:**  
+    - Price forecasting  
+    - Volatility modeling  
+    - Risk analysis  
     """)
 
-# ================== TAB 2 ==================
+# -------------------------------------------------
 with tab2:
-
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload crypto-markets.csv",
-        type=["csv"]
-    )
-
-    if uploaded_file is None:
-        st.warning("Please upload a CSV file to proceed.")
+    uploaded_file = st.sidebar.file_uploader("Upload crypto-markets.csv", type=["csv"])
+    if not uploaded_file:
+        st.warning("Upload dataset to continue")
         st.stop()
 
-    # ---------- LOAD DATA ----------
     df = pd.read_csv(uploaded_file)
+    df['date'] = pd.to_datetime(df['date'])
 
-    # ---------- DETECT DATE COLUMN ----------
-    date_col = detect_date_column(df)
-    if date_col is None:
-        st.error("No date column found. Expected: date / timestamp / time")
-        st.write("Available columns:", df.columns.tolist())
-        st.stop()
-
-    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-    df.dropna(subset=[date_col], inplace=True)
-    df.sort_values(date_col, inplace=True)
-
-    # ---------- DETECT CRYPTO COLUMN ----------
-    crypto_col = detect_crypto_column(df)
-    if crypto_col is None:
-        st.error(
-            "No crypto identifier column found.\n"
-            "Expected one of: symbol, coin, name, id, asset"
-        )
-        st.write("Available columns:", df.columns.tolist())
-        st.stop()
-
-    st.sidebar.success(f"Detected crypto column: `{crypto_col}`")
-    st.sidebar.success(f"Detected date column: `{date_col}`")
-
-    # ---------- FILTERS ----------
     st.sidebar.subheader("Filters")
+    symbol = st.sidebar.selectbox("Cryptocurrency", sorted(df['symbol'].unique()))
 
-    crypto_value = st.sidebar.selectbox(
-        "Cryptocurrency",
-        sorted(df[crypto_col].astype(str).unique())
-    )
+    df = df[df['symbol'] == symbol].copy()
+    df.set_index('date', inplace=True)
+    df.sort_index(inplace=True)
 
-    filtered_df = df[df[crypto_col].astype(str) == crypto_value].copy()
-    filtered_df.set_index(date_col, inplace=True)
+    st.subheader(f"{symbol} Closing Price")
+    st.write(df[['close']].head())
 
-    # ---------- NUMERIC COLUMNS ----------
-    numeric_cols = filtered_df.select_dtypes(
-        include=["int64", "float64"]
-    ).columns.tolist()
-
-    if not numeric_cols:
-        st.error("No numeric columns available for forecasting.")
-        st.stop()
-
-    target_col = st.sidebar.selectbox(
-        "Target Variable",
-        numeric_cols
-    )
-
-    series = filtered_df[target_col].dropna()
-
-    if len(series) < 120:
-        st.warning("Not enough data points for reliable forecasting.")
-        st.stop()
-
-    # ---------- PREVIEW ----------
-    st.subheader(f"{crypto_value} — {target_col.upper()}")
-    st.write(series.head())
-
-    # ---------- TIME SERIES ----------
-    fig = px.line(
-        series,
-        title=f"{crypto_value} {target_col.upper()} Over Time"
-    )
+    fig = px.line(df, y='close', title="Closing Price Over Time")
     st.plotly_chart(fig, use_container_width=True)
 
-    # ---------- DECOMPOSITION ----------
-    st.subheader("Seasonal Decomposition")
-    decomposition = sm.tsa.seasonal_decompose(
-        series,
-        model="additive",
-        period=30
-    )
-
-    fig = make_subplots(
-        rows=4, cols=1, shared_xaxes=True,
-        subplot_titles=["Observed", "Trend", "Seasonal", "Residual"]
-    )
-
-    fig.add_trace(go.Scatter(y=decomposition.observed), 1, 1)
-    fig.add_trace(go.Scatter(y=decomposition.trend), 2, 1)
-    fig.add_trace(go.Scatter(y=decomposition.seasonal), 3, 1)
-    fig.add_trace(go.Scatter(y=decomposition.resid), 4, 1)
-
-    fig.update_layout(height=800)
-    st.plotly_chart(fig, use_container_width=True)
-
-    # ---------- ADF TEST ----------
+    # ---------------- Stationarity ----------------
     st.subheader("ADF Stationarity Test")
-    adf_result = adfuller(series)
-    st.write({
-        "ADF Statistic": adf_result[0],
-        "p-value": adf_result[1],
-        "Lags Used": adf_result[2]
-    })
 
-    # ---------- TRAIN / TEST ----------
-    train = series[:-90]
-    test = series[-90:]
+    def adf_test(series):
+        res = adfuller(series.dropna())
+        return {
+            "ADF Statistic": res[0],
+            "p-value": res[1],
+            "Critical Values": res[4]
+        }
 
-    # ================== ARIMA ==================
-    if st.button("Run ARIMA Forecast"):
-        model = ARIMA(train, order=(5, 1, 0)).fit()
+    st.write(adf_test(df['close']))
+
+    diff_series = df['close'].diff().dropna()
+    st.write("After First Differencing")
+    st.write(adf_test(diff_series))
+
+    # ---------------- Train/Test ------------------
+    train = df['close'][:-90]
+    test = df['close'][-90:]
+
+    # ---------------- ARIMA -----------------------
+    if st.button("Run ARIMA"):
+        model = ARIMA(train, order=(5,1,0)).fit()
         forecast = model.forecast(90)
 
-        st.write(f"RMSE: {np.sqrt(mean_squared_error(test, forecast)):.2f}")
-        st.write(f"R²: {r2_score(test, forecast):.4f}")
+        rmse = np.sqrt(mean_squared_error(test, forecast))
+        r2 = r2_score(test, forecast)
 
-    # ================== SARIMA ==================
-    if st.button("Run SARIMA Forecast"):
-        model = SARIMAX(
-            train,
-            order=(1, 1, 1),
-            seasonal_order=(1, 1, 1, 7)
-        ).fit()
+        st.success(f"RMSE: {rmse:.2f} | R²: {r2:.4f}")
 
-        forecast = model.get_forecast(90).predicted_mean
-        st.write(f"RMSE: {np.sqrt(mean_squared_error(test, forecast)):.2f}")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=train.index, y=train, name="Train"))
+        fig.add_trace(go.Scatter(x=test.index, y=test, name="Test"))
+        fig.add_trace(go.Scatter(x=test.index, y=forecast, name="Forecast"))
+        st.plotly_chart(fig, use_container_width=True)
 
-    # ================== EXP SMOOTH ==================
-    if st.button("Run Exponential Smoothing"):
-        model = ExponentialSmoothing(
-            train,
-            trend="add",
-            seasonal="add",
-            seasonal_periods=30
-        ).fit()
-
-        forecast = model.forecast(90)
-        st.write(f"RMSE: {np.sqrt(mean_squared_error(test, forecast)):.2f}")
-
-    # ================== GARCH ==================
-    if st.button("Run GARCH Volatility Forecast"):
-        returns = 100 * series.pct_change().dropna()
-        model = arch_model(returns, vol="Garch", p=1, q=1)
+    # ---------------- GARCH -----------------------
+    if st.button("Run GARCH Volatility"):
+        returns = 100 * df['close'].pct_change().dropna()
+        model = arch_model(returns, vol='Garch', p=1, q=1)
         res = model.fit(disp="off")
-
         forecast = res.forecast(horizon=90)
         vol = forecast.variance.values[-1]
 
-        fig = px.line(y=vol, title="Forecasted Volatility")
+        fig = px.line(vol, title="90-Day Forecasted Volatility")
         st.plotly_chart(fig, use_container_width=True)
 
-    # ================== LSTM ==================
-    if st.button("Run LSTM Forecast"):
+    # ---------------- LSTM ------------------------
+    if st.button("Run LSTM"):
         scaler = MinMaxScaler()
-        scaled = scaler.fit_transform(series.values.reshape(-1, 1))
+        scaled = scaler.fit_transform(df[['close']])
 
-        X, y = [], []
-        look_back = 30
-        for i in range(len(scaled) - look_back):
-            X.append(scaled[i:i + look_back])
-            y.append(scaled[i + look_back])
+        def create_seq(data, step=30):
+            X, y = [], []
+            for i in range(len(data)-step):
+                X.append(data[i:i+step])
+                y.append(data[i+step])
+            return np.array(X), np.array(y)
 
-        X, y = np.array(X), np.array(y)
+        X, y = create_seq(scaled)
+        X = X.reshape(X.shape[0], X.shape[1], 1)
+
+        X_train, X_test = X[:-90], X[-90:]
+        y_train, y_test = y[:-90], y[-90:]
 
         model = Sequential([
-            LSTM(50, input_shape=(look_back, 1)),
+            LSTM(50, input_shape=(30,1)),
             Dense(1)
         ])
-        model.compile(loss="mse", optimizer="adam")
-        model.fit(X[:-90], y[:-90], epochs=10, batch_size=16, verbose=0)
 
-        preds = scaler.inverse_transform(model.predict(X[-90:]))
+        model.compile(optimizer='adam', loss='mse')
+        model.fit(X_train, y_train, epochs=10, batch_size=16, verbose=0)
+
+        preds = model.predict(X_test)
+        preds = scaler.inverse_transform(preds)
+        y_test = scaler.inverse_transform(y_test.reshape(-1,1))
+
+        rmse = np.sqrt(mean_squared_error(y_test, preds))
+        r2 = r2_score(y_test, preds)
+
+        st.success(f"LSTM RMSE: {rmse:.2f} | R²: {r2:.4f}")
 
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=test.index, y=test.values, name="Actual"))
-        fig.add_trace(go.Scatter(x=test.index, y=preds.flatten(), name="LSTM Forecast"))
-        fig.update_layout(title="LSTM Forecast vs Actual")
+        fig.add_trace(go.Scatter(y=y_test.flatten(), name="Actual"))
+        fig.add_trace(go.Scatter(y=preds.flatten(), name="Predicted"))
         st.plotly_chart(fig, use_container_width=True)
