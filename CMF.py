@@ -12,7 +12,7 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 # =====================================================
 st.set_page_config(page_title="AI Fact Checker", layout="wide")
 st.title("🕵️ AI Fact-Checking Web App")
-st.write("Upload a PDF to verify factual claims using live web data.")
+st.write("Upload a PDF to verify factual claims using **live web data**.")
 
 # =====================================================
 # LOAD API KEYS (MANDATORY)
@@ -20,12 +20,11 @@ st.write("Upload a PDF to verify factual claims using live web data.")
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
 TAVILY_API_KEY = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY"))
 
-if not OPENAI_API_KEY:
-    st.error("❌ OPENAI_API_KEY missing. Live verification cannot run.")
-    st.stop()
-
-if not TAVILY_API_KEY:
-    st.error("❌ TAVILY_API_KEY missing. Live verification cannot run.")
+if not OPENAI_API_KEY or not TAVILY_API_KEY:
+    st.error(
+        "❌ API keys missing.\n\n"
+        "Please add OPENAI_API_KEY and TAVILY_API_KEY in Streamlit Secrets."
+    )
     st.stop()
 
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
@@ -36,7 +35,7 @@ os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 # =====================================================
 try:
     llm = ChatOpenAI(
-        model="gpt-3.5-turbo",   # universally available
+        model="gpt-3.5-turbo",   # stable & widely available
         temperature=0
     )
     search_tool = TavilySearchResults(max_results=3)
@@ -76,6 +75,7 @@ def extract_claims(text):
         st.stop()
 
     lines = response.content.split("\n")
+
     claims = [
         line.strip("-• ")
         for line in lines
@@ -89,14 +89,14 @@ def verify_claim(claim):
     try:
         search_results = search_tool.run(claim)
     except Exception as e:
-        st.error("❌ Tavily web search failed")
+        st.error("❌ Tavily search failed")
         st.exception(e)
         st.stop()
 
-    verification_prompt = f"""
+    prompt = f"""
     Claim: {claim}
 
-    Web Search Results:
+    Search Results:
     {search_results}
 
     Classify the claim as:
@@ -110,7 +110,7 @@ def verify_claim(claim):
     """
 
     try:
-        response = llm.invoke([HumanMessage(content=verification_prompt)])
+        response = llm.invoke([HumanMessage(content=prompt)])
         return response.content, search_results
     except Exception as e:
         st.error("❌ OpenAI verification failed")
@@ -148,5 +148,6 @@ if uploaded_file:
         st.markdown(f"**{claim}**")
         st.markdown(verdict)
 
-        st.markdown("**Sources:**")
-        st.json(sources)
+        if sources:
+            st.markdown("**Sources:**")
+            st.json(sources)
