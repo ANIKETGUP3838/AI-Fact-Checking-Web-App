@@ -30,17 +30,17 @@ tab1, tab2 = st.tabs(["📄 Project Summary", "📊 Forecasting App"])
 with tab1:
     st.markdown("""
     ### 🔍 Objective
-    Forecast cryptocurrency market behavior using historical data.
+    Forecast cryptocurrency market metrics using historical time-series data.
 
     ### 📦 Dataset
-    - Time-series crypto market data
-    - Metrics: price, market cap, trading volume
+    - Daily crypto market data
+    - Columns vary by dataset (handled dynamically)
 
-    ### 🧠 Models Used
+    ### 🧠 Models
     - ARIMA
     - SARIMA
     - Exponential Smoothing
-    - ARCH / GARCH (volatility)
+    - ARCH / GARCH (Volatility)
     - LSTM Neural Network
 
     ### 📈 Output
@@ -53,57 +53,96 @@ with tab1:
 # TAB 2 — FORECASTING
 # ====================================================
 with tab2:
-    uploaded_file = st.sidebar.file_uploader("Upload crypto-markets.csv", type=["csv"])
+
+    uploaded_file = st.sidebar.file_uploader(
+        "Upload crypto-markets.csv",
+        type=["csv"]
+    )
 
     if uploaded_file is None:
-        st.warning("Upload the crypto dataset to proceed.")
+        st.warning("Please upload the crypto dataset to proceed.")
         st.stop()
 
     # -------------------- LOAD DATA --------------------
     df = pd.read_csv(uploaded_file)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df.dropna(subset=["date"], inplace=True)
     df.sort_values("date", inplace=True)
 
-    # -------------------- SIDEBAR FILTERS --------------------
     st.sidebar.subheader("Filters")
-    symbol = st.sidebar.selectbox("Cryptocurrency", df["symbol"].unique())
-    target_col = st.sidebar.selectbox(
-        "Target Variable",
-        ["price", "market_cap", "volume"]
+
+    # -------------------- SYMBOL FILTER --------------------
+    if "symbol" not in df.columns:
+        st.error("Dataset must contain a 'symbol' column.")
+        st.stop()
+
+    symbol = st.sidebar.selectbox(
+        "Cryptocurrency",
+        sorted(df["symbol"].unique())
     )
 
     filtered_df = df[df["symbol"] == symbol].copy()
     filtered_df.set_index("date", inplace=True)
 
+    # -------------------- TARGET COLUMN (SAFE) --------------------
+    numeric_cols = filtered_df.select_dtypes(
+        include=["int64", "float64"]
+    ).columns.tolist()
+
+    if not numeric_cols:
+        st.error("No numeric columns found for forecasting.")
+        st.stop()
+
+    target_col = st.sidebar.selectbox(
+        "Target Variable",
+        numeric_cols
+    )
+
     series = filtered_df[target_col].dropna()
 
+    if len(series) < 120:
+        st.warning("Not enough data points for reliable forecasting.")
+        st.stop()
+
     # -------------------- DATA PREVIEW --------------------
-    st.subheader(f"{symbol} — {target_col.upper()} Preview")
+    st.subheader(f"{symbol} — {target_col.upper()} (Preview)")
     st.write(series.head())
 
     # -------------------- TIME SERIES PLOT --------------------
-    fig = px.line(series, title=f"{symbol} {target_col.upper()} Over Time")
+    fig = px.line(
+        series,
+        title=f"{symbol} {target_col.upper()} Over Time"
+    )
     st.plotly_chart(fig, use_container_width=True)
 
-    # -------------------- DECOMPOSITION --------------------
+    # -------------------- SEASONAL DECOMPOSITION --------------------
     st.subheader("Seasonal Decomposition")
-    decomposition = sm.tsa.seasonal_decompose(series, model="additive", period=30)
+    decomposition = sm.tsa.seasonal_decompose(
+        series,
+        model="additive",
+        period=30
+    )
 
-    fig = make_subplots(rows=4, cols=1, shared_xaxes=True)
+    fig = make_subplots(
+        rows=4, cols=1, shared_xaxes=True,
+        subplot_titles=["Observed", "Trend", "Seasonal", "Residual"]
+    )
+
     fig.add_trace(go.Scatter(y=decomposition.observed), 1, 1)
     fig.add_trace(go.Scatter(y=decomposition.trend), 2, 1)
     fig.add_trace(go.Scatter(y=decomposition.seasonal), 3, 1)
     fig.add_trace(go.Scatter(y=decomposition.resid), 4, 1)
+
     fig.update_layout(height=800)
     st.plotly_chart(fig, use_container_width=True)
 
     # -------------------- ADF TEST --------------------
     st.subheader("ADF Stationarity Test")
-    adf_result = adfuller(series.dropna())
+    adf_result = adfuller(series)
     st.write({
         "ADF Statistic": adf_result[0],
         "p-value": adf_result[1],
-        "Lags": adf_result[2]
+        "Lags Used": adf_result[2]
     })
 
     # -------------------- TRAIN / TEST --------------------
@@ -114,7 +153,7 @@ with tab2:
     # ARIMA
     # ====================================================
     if st.button("Run ARIMA Forecast"):
-        model = ARIMA(train, order=(5,1,0)).fit()
+        model = ARIMA(train, order=(5, 1, 0)).fit()
         forecast = model.forecast(90)
 
         rmse = np.sqrt(mean_squared_error(test, forecast))
@@ -125,9 +164,10 @@ with tab2:
         st.write(f"R²: {r2:.4f}")
 
         fig = go.Figure()
-        fig.add_trace(go.Scatter(y=train, name="Train"))
-        fig.add_trace(go.Scatter(y=test, name="Test"))
-        fig.add_trace(go.Scatter(y=forecast, name="Forecast"))
+        fig.add_trace(go.Scatter(x=train.index, y=train, name="Train"))
+        fig.add_trace(go.Scatter(x=test.index, y=test, name="Test"))
+        fig.add_trace(go.Scatter(x=test.index, y=forecast, name="Forecast"))
+        fig.update_layout(title="ARIMA Forecast")
         st.plotly_chart(fig, use_container_width=True)
 
     # ====================================================
@@ -136,8 +176,8 @@ with tab2:
     if st.button("Run SARIMA Forecast"):
         model = SARIMAX(
             train,
-            order=(1,1,1),
-            seasonal_order=(1,1,1,7)
+            order=(1, 1, 1),
+            seasonal_order=(1, 1, 1, 7)
         ).fit()
 
         forecast = model.get_forecast(90).predicted_mean
@@ -166,9 +206,12 @@ with tab2:
         res = model.fit(disp="off")
 
         forecast = res.forecast(horizon=90)
-        vol = forecast.variance.values[-1]
+        volatility = forecast.variance.values[-1]
 
-        fig = px.line(y=vol, title="Forecasted Volatility")
+        fig = px.line(
+            y=volatility,
+            title="Forecasted Volatility (GARCH)"
+        )
         st.plotly_chart(fig, use_container_width=True)
 
     # ====================================================
@@ -176,7 +219,7 @@ with tab2:
     # ====================================================
     if st.button("Run LSTM Forecast"):
         scaler = MinMaxScaler()
-        scaled = scaler.fit_transform(series.values.reshape(-1,1))
+        scaled = scaler.fit_transform(series.values.reshape(-1, 1))
 
         X, y = [], []
         look_back = 30
@@ -191,9 +234,28 @@ with tab2:
             Dense(1)
         ])
         model.compile(loss="mse", optimizer="adam")
-        model.fit(X[:-90], y[:-90], epochs=10, batch_size=16, verbose=0)
+        model.fit(
+            X[:-90], y[:-90],
+            epochs=10,
+            batch_size=16,
+            verbose=0
+        )
 
         preds = model.predict(X[-90:])
         preds = scaler.inverse_transform(preds)
 
         st.success("LSTM Forecast Completed")
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=test.index,
+            y=test.values,
+            name="Actual"
+        ))
+        fig.add_trace(go.Scatter(
+            x=test.index,
+            y=preds.flatten(),
+            name="LSTM Forecast"
+        ))
+        fig.update_layout(title="LSTM Forecast vs Actual")
+        st.plotly_chart(fig, use_container_width=True)
