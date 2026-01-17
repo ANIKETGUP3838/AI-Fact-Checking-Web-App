@@ -23,7 +23,7 @@ TAVILY_API_KEY = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY"))
 if not OPENAI_API_KEY or not TAVILY_API_KEY:
     st.error(
         "❌ API keys not found.\n\n"
-        "Add OPENAI_API_KEY and TAVILY_API_KEY in Streamlit Secrets."
+        "Please add OPENAI_API_KEY and TAVILY_API_KEY in Streamlit Secrets."
     )
     st.stop()
 
@@ -31,10 +31,10 @@ os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
 # =====================================================
-# INITIALIZE MODELS
+# INITIALIZE MODELS (STABLE MODEL)
 # =====================================================
 llm = ChatOpenAI(
-    model="gpt-4o-mini",
+    model="gpt-3.5-turbo",   # ✅ universally available
     temperature=0
 )
 
@@ -63,7 +63,13 @@ def extract_claims(text):
     {text}
     """
 
-    response = llm.invoke([HumanMessage(content=prompt)])
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+    except Exception as e:
+        st.error("❌ Failed while extracting claims (OpenAI API error).")
+        st.exception(e)
+        st.stop()
+
     lines = response.content.split("\n")
 
     claims = [
@@ -72,11 +78,15 @@ def extract_claims(text):
         if re.search(r"\d", line)
     ]
 
+    # remove duplicates while preserving order
     return list(dict.fromkeys(claims))
 
 
 def verify_claim(claim):
-    search_results = search_tool.run(claim)
+    try:
+        search_results = search_tool.run(claim)
+    except Exception as e:
+        return "Status: False\nExplanation: Search failed.", None
 
     verification_prompt = f"""
     Claim: {claim}
@@ -94,8 +104,11 @@ def verify_claim(claim):
     Explanation: <1–2 lines explanation>
     """
 
-    response = llm.invoke([HumanMessage(content=verification_prompt)])
-    return response.content, search_results
+    try:
+        response = llm.invoke([HumanMessage(content=verification_prompt)])
+        return response.content, search_results
+    except Exception as e:
+        return "Status: False\nExplanation: OpenAI verification failed.", search_results
 
 
 # =====================================================
