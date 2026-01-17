@@ -4,7 +4,7 @@ import re
 import os
 
 from langchain_openai import ChatOpenAI
-from langchain.tools.tavily_search import TavilySearchResults
+from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain.schema import HumanMessage
 
 # ======================
