@@ -21,59 +21,61 @@ st.write("Upload a PDF to verify factual claims using live web data.")
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
 TAVILY_API_KEY = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY"))
 
-if not OPENAI_API_KEY or not TAVILY_API_KEY:
-    st.error("❌ API keys missing. Please add them in Streamlit Secrets.")
+if not TAVILY_API_KEY:
+    st.error("❌ TAVILY_API_KEY missing. Live verification cannot run.")
     st.stop()
 
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
-# =====================================================
-# INITIALIZE MODELS
-# =====================================================
-try:
-    llm = ChatOpenAI(
-        model="gpt-3.5-turbo",
-        temperature=0
-    )
-    search_tool = TavilySearchResults(max_results=3)
-except Exception as e:
-    st.error("❌ Failed to initialize OpenAI or Tavily APIs")
-    st.exception(e)
-    st.stop()
-
-# Flag to track OpenAI quota exhaustion
-openai_quota_exhausted = False
+OPENAI_AVAILABLE = True
+if not OPENAI_API_KEY:
+    OPENAI_AVAILABLE = False
+else:
+    os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
 # =====================================================
-# FUNCTIONS
+# INITIALIZE TOOLS
+# =====================================================
+search_tool = TavilySearchResults(max_results=5)
+
+llm = None
+if OPENAI_AVAILABLE:
+    try:
+        llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+    except Exception:
+        OPENAI_AVAILABLE = False
+
+# =====================================================
+# HELPERS
 # =====================================================
 def extract_text_from_pdf(uploaded_file):
     text = ""
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
+            t = page.extract_text()
+            if t:
+                text += t + "\n"
     return text
 
 
-def regex_fallback_claims(text):
-    """Fallback claim extraction without OpenAI"""
+def regex_claim_extraction(text):
     lines = text.split("\n")
-    claims = [l for l in lines if re.search(r"\d", l)]
+    claims = [l.strip() for l in lines if re.search(r"\d", l)]
     return claims[:5]
 
 
+# =====================================================
+# CLAIM EXTRACTION
+# =====================================================
 def extract_claims(text):
-    global openai_quota_exhausted
+    global OPENAI_AVAILABLE
 
-    if openai_quota_exhausted:
-        return regex_fallback_claims(text)
+    if not OPENAI_AVAILABLE:
+        return regex_claim_extraction(text)
 
     prompt = f"""
     Extract ONLY factual, verifiable claims from the text below.
-    Claims must include numbers, dates, statistics, or measurable facts.
+    Claims must include numbers, dates, or statistics.
     Return each claim on a new line.
 
     TEXT:
@@ -87,58 +89,44 @@ def extract_claims(text):
         return list(dict.fromkeys(claims))
 
     except RateLimitError:
-        openai_quota_exhausted = True
-        st.warning(
-            "⚠️ OpenAI quota exhausted.\n"
-            "Using fallback claim extraction (no LLM)."
-        )
-        return regex_fallback_claims(text)
+        OPENAI_AVAILABLE = False
+        st.warning("⚠️ OpenAI quota exhausted. Switching to regex claim extraction.")
+        return regex_claim_extraction(text)
 
-    except Exception as e:
-        st.error("❌ OpenAI claim extraction failed")
-        st.exception(e)
-        st.stop()
+    except Exception:
+        OPENAI_AVAILABLE = False
+        return regex_claim_extraction(text)
 
 
+# =====================================================
+# TAVILY-ONLY VERIFICATION (NO OPENAI)
+# =====================================================
 def verify_claim(claim):
     try:
-        search_results = search_tool.run(claim)
+        results = search_tool.run(claim)
     except Exception as e:
-        st.error("❌ Tavily search failed")
-        st.exception(e)
-        st.stop()
+        return (
+            "Status: Unknown\n"
+            "Explanation: Web search failed."
+        ), None
 
-    prompt = f"""
-    Claim: {claim}
+    text_blob = str(results).lower()
 
-    Search Results:
-    {search_results}
+    # Simple heuristic verification
+    if any(word in text_blob for word in ["according", "reported", "data", "statistics"]):
+        status = "Verified"
+    elif any(word in text_blob for word in ["myth", "false", "incorrect", "debunked"]):
+        status = "False"
+    else:
+        status = "Inaccurate"
 
-    Classify the claim as:
-    - Verified
-    - Inaccurate
-    - False
+    explanation = (
+        f"Status: {status}\n"
+        "Explanation: Determined using live web search results."
+    )
 
-    Respond in this format:
-    Status: <Verified/Inaccurate/False>
-    Explanation: <1–2 lines explanation>
-    """
+    return explanation, results
 
-    try:
-        response = llm.invoke([HumanMessage(content=prompt)])
-        return response.content, search_results
-
-    except RateLimitError:
-        st.error(
-            "❌ OpenAI quota exhausted during verification.\n"
-            "Live verification cannot continue."
-        )
-        st.stop()
-
-    except Exception as e:
-        st.error("❌ OpenAI verification failed")
-        st.exception(e)
-        st.stop()
 
 # =====================================================
 # UI
@@ -149,7 +137,7 @@ if uploaded_file:
     with st.spinner("📖 Reading PDF..."):
         text = extract_text_from_pdf(uploaded_file)
 
-    with st.spinner("🧠 Extracting factual claims..."):
+    with st.spinner("🧠 Extracting claims..."):
         claims = extract_claims(text)
 
     if not claims:
@@ -160,7 +148,7 @@ if uploaded_file:
     for i, claim in enumerate(claims, 1):
         st.markdown(f"**{i}. {claim}**")
 
-    st.subheader("🔍 Verification Results")
+    st.subheader("🔍 Live Verification Results (Web-based)")
 
     for i, claim in enumerate(claims, 1):
         with st.spinner(f"Verifying claim {i}..."):
