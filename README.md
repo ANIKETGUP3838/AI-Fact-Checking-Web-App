@@ -73,4 +73,13 @@ This design reflects real-world production reliability and ensures uninterrupted
 ---
 
 ## 📂 Project Structure
+```text
+fact-checker-app/
+│
+├── CMF.py
+├── requirements.txt
+├── README.md
+└── .streamlit/
+    └── config.toml
+```
 
