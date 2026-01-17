@@ -73,4 +73,11 @@ This ensures uninterrupted evaluation and reflects real-world production reliabi
 ---
 
 ## 📂 Project Structure
+fact-checker-app/
+│
+├── CMF.py
+├── requirements.txt
+├── README.md
+└── .streamlit/
+    └── config.toml
 
