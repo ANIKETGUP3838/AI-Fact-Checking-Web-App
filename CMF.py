@@ -15,30 +15,35 @@ st.title("🕵️ AI Fact-Checking Web App")
 st.write("Upload a PDF to verify factual claims using live web data.")
 
 # =====================================================
-# LOAD API KEYS (Secrets → Env fallback)
+# LOAD API KEYS (OPTIONAL)
 # =====================================================
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
 TAVILY_API_KEY = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY"))
 
+DEMO_MODE = False
+
 if not OPENAI_API_KEY or not TAVILY_API_KEY:
-    st.error(
-        "❌ API keys not found.\n\n"
-        "Please add OPENAI_API_KEY and TAVILY_API_KEY in Streamlit Secrets."
-    )
-    st.stop()
+    DEMO_MODE = True
+    st.warning("⚠️ Running in DEMO MODE (API keys missing or invalid)")
 
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
+if OPENAI_API_KEY:
+    os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+if TAVILY_API_KEY:
+    os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
 # =====================================================
-# INITIALIZE MODELS (STABLE MODEL)
+# INITIALIZE MODELS (ONLY IF NOT DEMO)
 # =====================================================
-llm = ChatOpenAI(
-    model="gpt-3.5-turbo",   # ✅ universally available
-    temperature=0
-)
-
-search_tool = TavilySearchResults(max_results=3)
+if not DEMO_MODE:
+    try:
+        llm = ChatOpenAI(
+            model="gpt-3.5-turbo",   # stable & widely available
+            temperature=0
+        )
+        search_tool = TavilySearchResults(max_results=3)
+    except Exception:
+        DEMO_MODE = True
+        st.warning("⚠️ Falling back to DEMO MODE due to API initialization failure")
 
 # =====================================================
 # FUNCTIONS
@@ -54,9 +59,17 @@ def extract_text_from_pdf(uploaded_file):
 
 
 def extract_claims(text):
+    # ---------- DEMO MODE ----------
+    if DEMO_MODE:
+        # Simple regex-based claim extraction
+        lines = text.split("\n")
+        claims = [line for line in lines if re.search(r"\d", line)]
+        return claims[:5]
+
+    # ---------- REAL MODE ----------
     prompt = f"""
     Extract ONLY factual, verifiable claims from the text below.
-    Claims must contain numbers, dates, statistics, or measurable facts.
+    Claims must include numbers, dates, statistics, or measurable facts.
     Return each claim on a new line.
 
     TEXT:
@@ -65,50 +78,51 @@ def extract_claims(text):
 
     try:
         response = llm.invoke([HumanMessage(content=prompt)])
-    except Exception as e:
-        st.error("❌ Failed while extracting claims (OpenAI API error).")
-        st.exception(e)
-        st.stop()
-
-    lines = response.content.split("\n")
-
-    claims = [
-        line.strip("-•1234567890. ")
-        for line in lines
-        if re.search(r"\d", line)
-    ]
-
-    # remove duplicates while preserving order
-    return list(dict.fromkeys(claims))
+        lines = response.content.split("\n")
+        claims = [line.strip("-• ") for line in lines if re.search(r"\d", line)]
+        return list(dict.fromkeys(claims))
+    except Exception:
+        st.warning("⚠️ OpenAI failed — switching to DEMO MODE")
+        return extract_claims(text)
 
 
 def verify_claim(claim):
+    # ---------- DEMO MODE ----------
+    if DEMO_MODE:
+        return (
+            "Status: Inaccurate\n"
+            "Explanation: Demo mode result. Live verification unavailable."
+        ), None
+
+    # ---------- REAL MODE ----------
     try:
         search_results = search_tool.run(claim)
-    except Exception as e:
-        return "Status: False\nExplanation: Search failed.", None
 
-    verification_prompt = f"""
-    Claim: {claim}
+        prompt = f"""
+        Claim: {claim}
 
-    Search Results:
-    {search_results}
+        Search Results:
+        {search_results}
 
-    Classify the claim as:
-    - Verified
-    - Inaccurate
-    - False
+        Classify the claim as:
+        - Verified
+        - Inaccurate
+        - False
 
-    Respond in this format:
-    Status: <Verified/Inaccurate/False>
-    Explanation: <1–2 lines explanation>
-    """
+        Respond in this format:
+        Status: <Verified/Inaccurate/False>
+        Explanation: <1–2 lines explanation>
+        """
 
-    try:
-        response = llm.invoke([HumanMessage(content=verification_prompt)])
+        response = llm.invoke([HumanMessage(content=prompt)])
         return response.content, search_results
-    except Exception as e:
-        return "Status: False\nExplanation: OpenAI verification failed.", search_results
+
+    except Exception:
+        st.warning("⚠️ Verification failed — DEMO MODE result shown")
+        return (
+            "Status: False\n"
+            "Explanation: Verification failed due to API error."
+        ), None
 
 
 # =====================================================
@@ -120,11 +134,11 @@ if uploaded_file:
     with st.spinner("📖 Reading PDF..."):
         text = extract_text_from_pdf(uploaded_file)
 
-    with st.spinner("🧠 Extracting factual claims..."):
+    with st.spinner("🧠 Extracting claims..."):
         claims = extract_claims(text)
 
     if not claims:
-        st.warning("No factual claims detected in this document.")
+        st.warning("No factual claims detected.")
         st.stop()
 
     st.subheader("📌 Extracted Claims")
