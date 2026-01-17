@@ -8,12 +8,6 @@ from langchain_core.messages import HumanMessage
 from langchain_community.tools.tavily_search import TavilySearchResults
 
 # =====================================================
-# GLOBAL FLAGS (IMPORTANT CORRECTION)
-# =====================================================
-DEMO_MODE = False
-OPENAI_DISABLED = False   # <- prevents repeated failures
-
-# =====================================================
 # STREAMLIT CONFIG
 # =====================================================
 st.set_page_config(page_title="AI Fact Checker", layout="wide")
@@ -21,34 +15,35 @@ st.title("🕵️ AI Fact-Checking Web App")
 st.write("Upload a PDF to verify factual claims using live web data.")
 
 # =====================================================
-# LOAD API KEYS (OPTIONAL)
+# LOAD API KEYS (MANDATORY)
 # =====================================================
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
 TAVILY_API_KEY = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY"))
 
-if not OPENAI_API_KEY or not TAVILY_API_KEY:
-    DEMO_MODE = True
-    st.info("ℹ️ Running in DEMO MODE (API keys unavailable)")
+if not OPENAI_API_KEY:
+    st.error("❌ OPENAI_API_KEY missing. Live verification cannot run.")
+    st.stop()
 
-if OPENAI_API_KEY:
-    os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-if TAVILY_API_KEY:
-    os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
+if not TAVILY_API_KEY:
+    st.error("❌ TAVILY_API_KEY missing. Live verification cannot run.")
+    st.stop()
+
+os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
 # =====================================================
-# INITIALIZE MODELS (ONLY ONCE)
+# INITIALIZE MODELS (LIVE ONLY)
 # =====================================================
-if not DEMO_MODE:
-    try:
-        llm = ChatOpenAI(
-            model="gpt-3.5-turbo",  # stable model
-            temperature=0
-        )
-        search_tool = TavilySearchResults(max_results=3)
-    except Exception:
-        DEMO_MODE = True
-        OPENAI_DISABLED = True
-        st.info("ℹ️ Switched to DEMO MODE")
+try:
+    llm = ChatOpenAI(
+        model="gpt-3.5-turbo",   # universally available
+        temperature=0
+    )
+    search_tool = TavilySearchResults(max_results=3)
+except Exception as e:
+    st.error("❌ Failed to initialize OpenAI or Tavily")
+    st.exception(e)
+    st.stop()
 
 # =====================================================
 # FUNCTIONS
@@ -64,14 +59,6 @@ def extract_text_from_pdf(uploaded_file):
 
 
 def extract_claims(text):
-    global DEMO_MODE, OPENAI_DISABLED
-
-    # ---------- DEMO MODE ----------
-    if DEMO_MODE or OPENAI_DISABLED:
-        lines = text.split("\n")
-        return [l for l in lines if re.search(r"\d", l)][:5]
-
-    # ---------- LIVE MODE ----------
     prompt = f"""
     Extract ONLY factual, verifiable claims from the text below.
     Claims must include numbers, dates, statistics, or measurable facts.
@@ -83,54 +70,52 @@ def extract_claims(text):
 
     try:
         response = llm.invoke([HumanMessage(content=prompt)])
-        lines = response.content.split("\n")
-        claims = [l.strip("-• ") for l in lines if re.search(r"\d", l)]
-        return list(dict.fromkeys(claims))
+    except Exception as e:
+        st.error("❌ OpenAI claim extraction failed")
+        st.exception(e)
+        st.stop()
 
-    except Exception:
-        OPENAI_DISABLED = True
-        DEMO_MODE = True
-        return extract_claims(text)
+    lines = response.content.split("\n")
+    claims = [
+        line.strip("-• ")
+        for line in lines
+        if re.search(r"\d", line)
+    ]
+
+    return list(dict.fromkeys(claims))
 
 
 def verify_claim(claim):
-    global DEMO_MODE, OPENAI_DISABLED
-
-    # ---------- DEMO MODE ----------
-    if DEMO_MODE or OPENAI_DISABLED:
-        return (
-            "Status: Inaccurate\n"
-            "Explanation: Demo mode result (live verification unavailable)."
-        ), None
-
-    # ---------- LIVE MODE ----------
     try:
         search_results = search_tool.run(claim)
+    except Exception as e:
+        st.error("❌ Tavily web search failed")
+        st.exception(e)
+        st.stop()
 
-        prompt = f"""
-        Claim: {claim}
+    verification_prompt = f"""
+    Claim: {claim}
 
-        Search Results:
-        {search_results}
+    Web Search Results:
+    {search_results}
 
-        Classify the claim as:
-        - Verified
-        - Inaccurate
-        - False
+    Classify the claim as:
+    - Verified
+    - Inaccurate
+    - False
 
-        Respond in this format:
-        Status: <Verified/Inaccurate/False>
-        Explanation: <1–2 lines explanation>
-        """
+    Respond in this format:
+    Status: <Verified/Inaccurate/False>
+    Explanation: <1–2 lines explanation>
+    """
 
-        response = llm.invoke([HumanMessage(content=prompt)])
+    try:
+        response = llm.invoke([HumanMessage(content=verification_prompt)])
         return response.content, search_results
-
-    except Exception:
-        OPENAI_DISABLED = True
-        DEMO_MODE = True
-        return verify_claim(claim)
-
+    except Exception as e:
+        st.error("❌ OpenAI verification failed")
+        st.exception(e)
+        st.stop()
 
 # =====================================================
 # UI
@@ -141,18 +126,18 @@ if uploaded_file:
     with st.spinner("📖 Reading PDF..."):
         text = extract_text_from_pdf(uploaded_file)
 
-    with st.spinner("🧠 Extracting claims..."):
+    with st.spinner("🧠 Extracting factual claims..."):
         claims = extract_claims(text)
 
     if not claims:
-        st.warning("No factual claims detected.")
+        st.warning("No factual claims detected in the document.")
         st.stop()
 
     st.subheader("📌 Extracted Claims")
     for i, claim in enumerate(claims, 1):
         st.markdown(f"**{i}. {claim}**")
 
-    st.subheader("🔍 Verification Results")
+    st.subheader("🔍 Live Verification Results")
 
     for i, claim in enumerate(claims, 1):
         with st.spinner(f"Verifying claim {i}..."):
@@ -163,6 +148,5 @@ if uploaded_file:
         st.markdown(f"**{claim}**")
         st.markdown(verdict)
 
-        if sources:
-            st.markdown("**Sources:**")
-            st.json(sources)
+        st.markdown("**Sources:**")
+        st.json(sources)
