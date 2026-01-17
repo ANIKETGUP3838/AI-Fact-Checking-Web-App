@@ -1,120 +1,137 @@
 import streamlit as st
 import pdfplumber
-import re
 import os
+import re
 
 from langchain_openai import ChatOpenAI
-from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.messages import HumanMessage
+from langchain_community.tools.tavily_search import TavilySearchResults
 
-# ======================
-# CONFIG
-# ======================
-st.set_page_config(page_title="Fact Checker", layout="wide")
+# =============================
+# STREAMLIT CONFIG
+# =============================
+st.set_page_config(
+    page_title="AI Fact Checker",
+    layout="wide"
+)
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+st.title("🕵️ AI Fact-Checking Web App")
+st.write("Upload a PDF to verify factual claims using live web data.")
 
+# =============================
+# ENVIRONMENT CHECK
+# =============================
+if not os.getenv("OPENAI_API_KEY"):
+    st.error("❌ OPENAI_API_KEY not found. Please set it in environment variables.")
+    st.stop()
+
+if not os.getenv("TAVILY_API_KEY"):
+    st.error("❌ TAVILY_API_KEY not found. Please set it in environment variables.")
+    st.stop()
+
+# =============================
+# INITIALIZE MODELS
+# =============================
 llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0
 )
 
 search_tool = TavilySearchResults(
-    max_results=3,
-    tavily_api_key=TAVILY_API_KEY
+    max_results=3
 )
 
-# ======================
+# =============================
 # FUNCTIONS
-# ======================
-def extract_text_from_pdf(pdf):
+# =============================
+def extract_text_from_pdf(uploaded_file):
     text = ""
-    with pdfplumber.open(pdf) as p:
-        for page in p.pages:
-            text += page.extract_text() + "\n"
+    with pdfplumber.open(uploaded_file) as pdf:
+        for page in pdf.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
     return text
 
 
 def extract_claims(text):
-    """
-    Uses LLM to extract verifiable claims
-    """
     prompt = f"""
     Extract ONLY factual, verifiable claims from the text below.
-    Claims must include statistics, numbers, dates, or factual statements.
+    Claims must contain numbers, dates, statistics, or measurable facts.
 
-    Return them as a numbered list.
+    Return each claim on a new line.
 
     TEXT:
     {text}
     """
 
     response = llm([HumanMessage(content=prompt)])
-    claims = response.content.split("\n")
+    lines = response.content.split("\n")
 
-    return [c for c in claims if re.search(r"\d", c)]
+    claims = [
+        line.strip("-•1234567890. ")
+        for line in lines
+        if re.search(r"\d", line)
+    ]
+
+    return list(dict.fromkeys(claims))  # remove duplicates
 
 
 def verify_claim(claim):
-    """
-    Verifies claim using live web search
-    """
     search_results = search_tool.run(claim)
 
     verification_prompt = f"""
     Claim: {claim}
 
-    Web Search Results:
+    Search Results:
     {search_results}
 
-    Based on the search results, classify the claim as:
+    Decide whether the claim is:
     - Verified
     - Inaccurate
     - False
 
-    Give a 1–2 line explanation and mention the correct fact if applicable.
+    Respond in this format:
+
+    Status: <Verified/Inaccurate/False>
+    Explanation: <1–2 lines explanation>
     """
 
     response = llm([HumanMessage(content=verification_prompt)])
-
     return response.content, search_results
 
 
-# ======================
+# =============================
 # UI
-# ======================
-st.title("🕵️ AI Fact-Checking Web App")
-st.write("Upload a PDF and automatically verify claims using live web data.")
-
+# =============================
 uploaded_file = st.file_uploader("📄 Upload PDF", type=["pdf"])
 
 if uploaded_file:
-    with st.spinner("Extracting text from PDF..."):
+    with st.spinner("📖 Reading PDF..."):
         text = extract_text_from_pdf(uploaded_file)
 
-    with st.spinner("Identifying factual claims..."):
+    with st.spinner("🧠 Extracting factual claims..."):
         claims = extract_claims(text)
 
-    st.subheader("📌 Extracted Claims")
-
     if not claims:
-        st.warning("No verifiable claims found.")
-    else:
-        for i, claim in enumerate(claims, 1):
-            st.markdown(f"**{i}. {claim}**")
+        st.warning("No factual claims detected in the document.")
+        st.stop()
 
-        st.subheader("🔍 Verification Results")
+    st.subheader("📌 Extracted Claims")
+    for i, claim in enumerate(claims, 1):
+        st.markdown(f"**{i}. {claim}**")
 
-        for i, claim in enumerate(claims, 1):
-            with st.spinner(f"Verifying claim {i}..."):
-                verdict, sources = verify_claim(claim)
+    st.subheader("🔍 Verification Results")
 
-            st.markdown("---")
-            st.markdown(f"### Claim {i}")
-            st.markdown(f"**{claim}**")
-            st.markdown(verdict)
+    for i, claim in enumerate(claims, 1):
+        with st.spinner(f"Verifying claim {i}..."):
+            verdict, sources = verify_claim(claim)
 
-            if sources:
-                st.markdown("**Sources:**")
-                st.json(sources)
+        st.markdown("---")
+        st.markdown(f"### Claim {i}")
+        st.markdown(f"**{claim}**")
+        st.markdown(verdict)
+
+        if sources:
+            st.markdown("**Sources:**")
+            st.json(sources)
