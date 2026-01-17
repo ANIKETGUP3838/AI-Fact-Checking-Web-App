@@ -90,7 +90,6 @@ def extract_claims(text):
 
     except RateLimitError:
         OPENAI_AVAILABLE = False
-        st.warning("⚠️ OpenAI quota exhausted. Switching to regex claim extraction.")
         return regex_claim_extraction(text)
 
     except Exception:
